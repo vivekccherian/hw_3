@@ -3,8 +3,8 @@ AttendanceChimp data model (HW3).
 
 Six tables, matching app/docs/my-data-model.png:
 
-    InstructorProfile  - the teachers
-    StudentProfile     - the students
+    InstructorProfile  - the teachers (linked to a Django login account)
+    StudentProfile     - the students (linked to a Django login account)
     Course             - a class, taught by exactly one instructor
     Enrollment         - which student is in which course (many-to-many link)
     Lecture            - one class meeting, belongs to one course
@@ -12,10 +12,16 @@ Six tables, matching app/docs/my-data-model.png:
 
 Why separate Instructor and Student tables instead of one Users table?
 Students and instructors store different information (students have a
-student_id, instructors don't), and a separate table means the database
-itself stops a student from being set as a course's instructor.
+student_id, instructors have a department), and a separate table means the
+database itself stops a student from being set as a course's instructor.
+
+Both profiles are linked one-to-one to Django's built-in User model, so every
+student and instructor gets a login account (username, password, name, email)
+for free instead of us rebuilding authentication.
 
 Relationships (all made with foreign keys):
+    InstructorProfile.user -> User            (one-to-one)
+    StudentProfile.user    -> User            (one-to-one)
     Course.instructor  -> InstructorProfile   (one instructor, many courses)
     Enrollment.student -> StudentProfile      (one student, many enrollments)
     Enrollment.course  -> Course              (one course, many enrollments)
@@ -26,6 +32,7 @@ Relationships (all made with foreign keys):
 
 import uuid
 
+from django.contrib.auth.models import User
 from django.db import models
 
 
@@ -33,32 +40,38 @@ class InstructorProfile(models.Model):
     """A teacher who can be assigned to courses.
 
     Fields:
-        name:  the instructor's full name.
-        email: the instructor's email (unique, so no duplicates).
+        user:       the teacher's Django login account (one-to-one). Name and
+                    email live on the User. Deleting the User deletes the
+                    profile (CASCADE).
+        department: the teacher's department (optional).
     """
 
-    name = models.CharField(max_length=100)
-    email = models.EmailField(unique=True)
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="instructor_profile"
+    )
+    department = models.CharField(max_length=100, blank=True)
 
     def __str__(self):
-        return self.name
+        return self.user.get_full_name() or self.user.username
 
 
 class StudentProfile(models.Model):
     """A student who can enroll in courses and upload QR code photos.
 
     Fields:
-        name:       the student's full name.
-        email:      the student's email (unique).
+        user:       the student's Django login account (one-to-one). Name and
+                    email live on the User. Deleting the User deletes the
+                    profile (CASCADE).
         student_id: the school ID number (unique), used to tell students apart.
     """
 
-    name = models.CharField(max_length=100)
-    email = models.EmailField(unique=True)
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="student_profile"
+    )
     student_id = models.CharField(max_length=20, unique=True)
 
     def __str__(self):
-        return f"{self.name} ({self.student_id})"
+        return f"{self.user.get_full_name() or self.user.username} ({self.student_id})"
 
 
 class Course(models.Model):
@@ -108,7 +121,7 @@ class Enrollment(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.student.name} in {self.course.name}"
+        return f"{self.student} in {self.course.name}"
 
 
 class Lecture(models.Model):
@@ -163,4 +176,4 @@ class QRCodeUpload(models.Model):
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Upload by {self.student.name} at {self.uploaded_at}"
+        return f"Upload by {self.student} at {self.uploaded_at}"
