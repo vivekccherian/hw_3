@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Log In - AttendanceChimp</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; margin-top: 60px; }
+    form p { margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>Log In</h1>
+  {% if form.errors %}
+    <p style="color: red;">Wrong user name or password. Please try again.</p>
+  {% endif %}
+  <form method="post" action="{% url 'login' %}">
+    {% csrf_token %}
+    <p><label>User name: <input type="text" name="username" required></label></p>
+    <p><label>Password: <input type="password" name="password" required></label></p>
+    <input type="hidden" name="next" value="{{ next }}">
+    <p><button type="submit">Log In</button></p>
+  </form>
+  <p><a href="/app/">Home</a> | <a href="/app/new">Sign up</a></p>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AttendanceChimp</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; margin-top: 60px; }
+  </style>
+</head>
+<body>
+  <h1>AttendanceChimp</h1>
+  <p>AttendanceChimp tracks class attendance with QR codes. Students upload a photo of the lecture's QR code, and instructors see who showed up.</p>
+
+  <p>
+    {% if user_name %}
+      Logged in as <strong>{{ user_name }}</strong>
+    {% else %}
+      Not logged in.
+    {% endif %}
+  </p>
+
+  <p>Current time (CST): {{ time }}</p>
+
+  {% if user_name %}
+    <form method="post" action="{% url 'logout' %}">
+      {% csrf_token %}
+      <button type="submit">Log out</button>
+    </form>
+  {% else %}
+    <p><a href="{% url 'login' %}">Log in</a> | <a href="{% url 'new' %}">Sign up</a></p>
+  {% endif %}
+</body>
+</html>
