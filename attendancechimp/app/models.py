@@ -85,7 +85,7 @@ class Course(models.Model):
         meeting_schedule: when the class meets, e.g. "Mon/Wed 10:30-11:50".
     """
 
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     instructor = models.ForeignKey(
         InstructorProfile, on_delete=models.PROTECT, related_name="courses"
     )
