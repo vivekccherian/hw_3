@@ -31,9 +31,11 @@ Relationships (all made with foreign keys):
 """
 
 import uuid
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth.models import User
 from django.db import models
+from django.utils import timezone
 
 
 class InstructorProfile(models.Model):
@@ -75,21 +77,47 @@ class StudentProfile(models.Model):
 
 
 class Course(models.Model):
-    """A class taught by exactly one instructor.
+    """A class taught by exactly one instructor, meeting on some weekdays.
 
     Fields:
-        name:             the course name, e.g. "DATA 13600".
-        instructor:       who teaches it. on_delete=PROTECT means you cannot
-                          delete an instructor who still has courses, so
-                          courses are never lost by accident.
-        meeting_schedule: when the class meets, e.g. "Mon/Wed 10:30-11:50".
+        name:       the course number, e.g. "DATA13600" (unique).
+        instructor: who teaches it. on_delete=PROTECT means you cannot
+                    delete an instructor who still has courses, so
+                    courses are never lost by accident.
+        mon..fri:   one True/False value per weekday; True means the course
+                    meets that day. (No weekend fields: courses never meet then.)
+        start_time: the time of day class starts (a time object, e.g. 10:30).
+        end_time:   the time of day class ends (a time object, e.g. 11:50).
     """
 
     name = models.CharField(max_length=100, unique=True)
     instructor = models.ForeignKey(
         InstructorProfile, on_delete=models.PROTECT, related_name="courses"
     )
-    meeting_schedule = models.CharField(max_length=100)
+    mon = models.BooleanField(default=False)
+    tue = models.BooleanField(default=False)
+    wed = models.BooleanField(default=False)
+    thu = models.BooleanField(default=False)
+    fri = models.BooleanField(default=False)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    def meets_on_day(self, weekday):
+        """Return True if the course meets on `weekday`.
+
+        `weekday` is a number like Python's date.weekday():
+        0 = Monday, 1 = Tuesday, ... 4 = Friday, 5 = Saturday, 6 = Sunday.
+        Saturday and Sunday always return False.
+        """
+        days = [self.mon, self.tue, self.wed, self.thu, self.fri]
+        return 0 <= weekday < len(days) and days[weekday]
+
+    @property
+    def meeting_schedule(self):
+        """Readable schedule, e.g. "Mon/Wed 10:30-11:50"."""
+        flags = zip(("Mon", "Tue", "Wed", "Thu", "Fri"), (self.mon, self.tue, self.wed, self.thu, self.fri))
+        names = [label for label, meets in flags if meets]
+        return f"{'/'.join(names)} {self.start_time:%H:%M}-{self.end_time:%H:%M}"
 
     def __str__(self):
         return self.name
@@ -177,3 +205,57 @@ class QRCodeUpload(models.Model):
 
     def __str__(self):
         return f"Upload by {self.student} at {self.uploaded_at}"
+
+
+# ----------------------------------------------------------------------------
+# Validation (HW6)
+# ----------------------------------------------------------------------------
+
+CHICAGO = ZoneInfo("America/Chicago")
+
+
+def getUploadsForCourse(course):
+    """Return the valid QRCodeUpload objects for a course, as a Python list.
+
+    Input:
+        course: the course number string, e.g. "DATA13600" (Course.name).
+
+    An upload is valid when BOTH are true:
+        a) it was made on a weekday when the course meets, and
+        b) its time of day is between the course's start_time and end_time
+           (both ends included).
+
+    Timestamps are stored in UTC, but classes happen in Chicago, so every
+    upload time is converted to Chicago time before it is checked. For a
+    10:00-11:20 class, an upload at 10:30 Chicago time counts, while one at
+    10:30 UTC (which is 5:30 or 4:30 in the morning in Chicago) does not.
+
+    Uploads are found through the chain Upload -> Lecture -> Course, so uploads
+    with no lecture, or for other courses, are left out. If no course has that
+    number, the result is an empty list (no error).
+
+    This lives in models.py (not views.py) because it never touches a request,
+    and models.py must not import from views.py (that would be a circular import).
+    """
+    course_obj = Course.objects.filter(name=course).first()
+    if course_obj is None:
+        return []
+
+    uploads = (
+        QRCodeUpload.objects.filter(lecture__course=course_obj)
+        .select_related("student__user", "lecture")
+        .order_by("uploaded_at")
+    )
+
+    valid = []
+    for upload in uploads:
+        when = upload.uploaded_at
+        if timezone.is_naive(when):
+            when = when.replace(tzinfo=ZoneInfo("UTC"))  # stored times are UTC
+        local = when.astimezone(CHICAGO)
+
+        if not course_obj.meets_on_day(local.weekday()):
+            continue
+        if course_obj.start_time <= local.time() <= course_obj.end_time:
+            valid.append(upload)
+    return valid

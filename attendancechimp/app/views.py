@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from .models import Course, InstructorProfile, Lecture, QRCodeUpload, StudentProfile
+from .models import Course, InstructorProfile, Lecture, QRCodeUpload, StudentProfile, getUploadsForCourse
 
 CDT = ZoneInfo("America/Chicago")
 
@@ -158,13 +158,23 @@ def new_qr_upload(request: HttpRequest) -> HttpResponse:
     return render(request, "app/new_qr_upload.html")
 
 
+def _parse_time(text: str):
+    """Turn "HH:MM" (or "HH:MM:SS") into a datetime.time, or None if it is not a valid time."""
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(text.strip(), fmt).time()
+        except ValueError:
+            pass
+    return None
+
+
 @csrf_exempt
 @require_POST
 def createCourse(request: HttpRequest) -> JsonResponse:
     """Create a Course taught by the logged-in instructor.
 
-    POST fields: course-name, start-time, end-time, and one or more of
-    day-mon, day-tue, day-wed, day-thu, day-fri.
+    POST fields: course-name, start-time, end-time (both HH:MM, 24-hour), and
+    one or more of day-mon, day-tue, day-wed, day-thu, day-fri.
     Responses: 200 created, 400 bad input, 401 not an instructor, 409 name taken.
     """
     instructor = _instructor_profile(request.user)
@@ -172,28 +182,24 @@ def createCourse(request: HttpRequest) -> JsonResponse:
         return _unauthorized("Only logged-in instructors can create courses")
 
     name = request.POST.get("course-name", "").strip()
-    start = request.POST.get("start-time", "").strip()
-    end = request.POST.get("end-time", "").strip()
-    days = [
-        label
-        for key, label in (("mon", "Mon"), ("tue", "Tue"), ("wed", "Wed"), ("thu", "Thu"), ("fri", "Fri"))
-        if request.POST.get(f"day-{key}", "").strip().lower() not in ("", "0", "false", "off")
-    ]
+    start = _parse_time(request.POST.get("start-time", ""))
+    end = _parse_time(request.POST.get("end-time", ""))
+    days = {
+        key: request.POST.get(f"day-{key}", "").strip().lower() not in ("", "0", "false", "off")
+        for key in ("mon", "tue", "wed", "thu", "fri")
+    }
 
-    if not name or not start or not end or not days:
+    if not name or start is None or end is None or not any(days.values()):
         return JsonResponse(
-            {"error": "course-name, start-time, end-time and at least one day are required"}, status=400
+            {"error": "course-name, start-time (HH:MM), end-time (HH:MM) and at least one day are required"},
+            status=400,
         )
     if len(name) > 100:
         return JsonResponse({"error": "course-name is too long (max 100 characters)"}, status=400)
     if Course.objects.filter(name=name).exists():
         return JsonResponse({"error": "A course with that name already exists"}, status=409)
 
-    Course.objects.create(
-        name=name,
-        instructor=instructor,
-        meeting_schedule=f"{'/'.join(days)} {start}-{end}",
-    )
+    Course.objects.create(name=name, instructor=instructor, start_time=start, end_time=end, **days)
     return JsonResponse({"status": "ok", "course": name})
 
 
@@ -258,6 +264,35 @@ def dumpUploads(request: HttpRequest) -> JsonResponse:
             {
                 "username": upload.student.user.username,
                 "upload_time": when.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+    return JsonResponse(data, safe=False)
+
+
+@require_GET
+def getUploads(request: HttpRequest) -> JsonResponse:
+    """Return the VALID uploads for one course, e.g. /app/getUploads?course=DATA13600.
+
+    Valid means made on a meeting day and during class time (Chicago time);
+    the filtering is done by getUploadsForCourse() in models.py.
+    Output: [{"username": ..., "upload_time": "YYYY-MM-DD HH:MM:SS"}, ...]
+    Responses: 200 list (empty if the course does not exist), 400 no course
+    parameter, 401 not an instructor.
+    """
+    if _instructor_profile(request.user) is None:
+        return _unauthorized("Only logged-in instructors can view uploads")
+
+    course = request.GET.get("course", "").strip()
+    if not course:
+        return JsonResponse({"error": "Missing course parameter"}, status=400)
+
+    data = []
+    for upload in getUploadsForCourse(course):
+        local = upload.uploaded_at.astimezone(CDT)  # Chicago time, same as the validation
+        data.append(
+            {
+                "username": upload.student.user.username,
+                "upload_time": local.strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
     return JsonResponse(data, safe=False)
